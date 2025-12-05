@@ -535,6 +535,13 @@ astfold_expr(expr_ty node_, PyArena *ctx_, _PyASTPreprocessState *state)
         CALL(astfold_arguments, arguments_ty, node_->v.Lambda.args);
         CALL(astfold_expr, expr_ty, node_->v.Lambda.body);
         break;
+    case Lamdef_kind:
+        CALL(astfold_arguments, arguments_ty, node_->v.Lamdef.args);
+        CALL(astfold_body, asdl_seq, node_->v.Lamdef.body);
+        if (!(state->ff_features & CO_FUTURE_ANNOTATIONS)) {
+            CALL_OPT(astfold_expr, expr_ty, node_->v.Lamdef.returns);
+        }
+        break;
     case IfExp_kind:
         CALL(astfold_expr, expr_ty, node_->v.IfExp.test);
         CALL(astfold_expr, expr_ty, node_->v.IfExp.body);

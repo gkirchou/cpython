@@ -143,6 +143,8 @@ compound_stmt[stmt_ty]:
     | &'try' try_stmt
     | &'while' while_stmt
     | match_stmt
+    | &(NAME '=' "lamdef") lamdef_stmt
+    | &('return' "lamdef") lamdef_return_stmt
 
 # SIMPLE STATEMENTS
 # =================
@@ -711,9 +713,54 @@ expressions[expr_ty]:
 expression[expr_ty] (memo):
     | invalid_expression
     | invalid_legacy_expression
+    | &"lamdef" lamdef_expr
     | a=disjunction 'if' b=disjunction 'else' c=expression { _PyAST_IfExp(b, a, c, EXTRA) }
     | disjunction
     | lambdef
+
+lamdef_expr[expr_ty]:
+    # Note: single-line lamdef is banned.
+    # Uncomment it to make a lambda-equivalent implementation.
+    # | lamdef_single
+    | lamdef_multi
+
+lamdef_single[expr_ty]:
+    | "lamdef" '(' params=[params] ')' ['->' z=expression { z }] ':' body=lamdef_body_single {
+        _PyAST_Lambda(
+            (params) ? params : CHECK(arguments_ty, _PyPegen_empty_arguments(p)),
+            body,
+            EXTRA
+        )
+    }
+
+lamdef_multi[expr_ty]:
+    | "lamdef" '(' params=[params] ')' a=['->' z=expression { z }] ':' body=lamdef_body_multi {
+        _PyAST_Lamdef(
+            (params) ? params : CHECK(arguments_ty, _PyPegen_empty_arguments(p)),
+            body,
+            a,
+            EXTRA
+        )
+    }
+
+lamdef_body_single[expr_ty]:
+    | 'return' a=expression { a }
+    # TBD: whether to treat lamdef the same as lambda?
+    | a=expression { a }
+
+lamdef_body_multi[asdl_stmt_seq*]:
+    | NEWLINE INDENT a=statements DEDENT { a }
+
+lamdef_stmt[stmt_ty]:
+    | a=NAME '=' b=lamdef_multi {
+        _PyAST_Assign(
+            (asdl_expr_seq*)_PyPegen_singleton_seq(p, _PyPegen_set_expr_context(p, a, Store)),
+            b,
+            NULL,
+            EXTRA) }
+
+lamdef_return_stmt[stmt_ty]:
+    | 'return' a=lamdef_multi { _PyAST_Return(a, EXTRA) }
 
 yield_expr[expr_ty]:
     | 'yield' 'from' a=expression { _PyAST_YieldFrom(a, EXTRA) }

@@ -2423,6 +2423,32 @@ symtable_visit_expr(struct symtable *st, expr_ty e)
             return 0;
         break;
     }
+    case Lamdef_kind: {
+        if (e->v.Lamdef.args->defaults)
+            VISIT_SEQ(st, expr, e->v.Lamdef.args->defaults);
+        if (e->v.Lamdef.args->kw_defaults)
+            VISIT_SEQ_WITH_NULL(st, expr, e->v.Lamdef.args->kw_defaults);
+        PySTEntryObject *new_ste = ste_new(st, &_Py_STR(anon_lambda), FunctionBlock, (void *)e,
+                                           LOCATION(e));
+        if (!new_ste) {
+            return 0;
+        }
+        if (!symtable_visit_annotations(st, (stmt_ty)e, e->v.Lamdef.args,
+                                        e->v.Lamdef.returns, new_ste)) {
+            Py_DECREF(new_ste);
+            return 0;
+        }
+        if (!symtable_enter_existing_block(st, new_ste, /* add_to_children */true)) {
+            Py_DECREF(new_ste);
+            return 0;
+        }
+        Py_DECREF(new_ste);
+        VISIT(st, arguments, e->v.Lamdef.args);
+        VISIT_SEQ(st, stmt, e->v.Lamdef.body);
+        if (!symtable_exit_block(st))
+            return 0;
+        break;
+    }
     case IfExp_kind:
         VISIT(st, expr, e->v.IfExp.test);
         VISIT(st, expr, e->v.IfExp.body);

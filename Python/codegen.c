@@ -2050,6 +2050,81 @@ codegen_lambda(compiler *c, expr_ty e)
 }
 
 static int
+codegen_lamdef(compiler *c, expr_ty e)
+{
+    PyCodeObject *co;
+    Py_ssize_t funcflags;
+    arguments_ty args = e->v.Lamdef.args;
+    asdl_stmt_seq *body = e->v.Lamdef.body;
+    assert(e->kind == Lamdef_kind);
+
+    location loc = LOC(e);
+    funcflags = codegen_default_arguments(c, loc, args);
+    RETURN_IF_ERROR(funcflags);
+
+    int annotations_flag = codegen_function_annotations(c, loc, args, e->v.Lamdef.returns);
+    if (annotations_flag < 0) {
+        return ERROR;
+    }
+    funcflags |= annotations_flag;
+
+    _PyCompile_CodeUnitMetadata umd = {
+        .u_argcount = asdl_seq_LEN(args->args),
+        .u_posonlyargcount = asdl_seq_LEN(args->posonlyargs),
+        .u_kwonlyargcount = asdl_seq_LEN(args->kwonlyargs),
+    };
+    _Py_DECLARE_STR(anon_lambda, "<lambda>");
+    RETURN_IF_ERROR(
+        codegen_enter_scope(c, &_Py_STR(anon_lambda), COMPILE_SCOPE_LAMBDA,
+                            (void *)e, e->lineno, NULL, &umd));
+
+    PySTEntryObject *ste = SYMTABLE_ENTRY(c);
+    Py_ssize_t first_instr = 0;
+    if (ste->ste_has_docstring) {
+        PyObject *docstring = _PyAST_GetDocString(body);
+        assert(docstring);
+        first_instr = 1;
+        docstring = _PyCompile_CleanDoc(docstring);
+        if (docstring == NULL) {
+            _PyCompile_ExitScope(c);
+            return ERROR;
+        }
+        Py_ssize_t idx = _PyCompile_AddConst(c, docstring);
+        Py_DECREF(docstring);
+        RETURN_IF_ERROR_IN_SCOPE(c, idx < 0 ? ERROR : SUCCESS);
+    }
+
+    NEW_JUMP_TARGET_LABEL(c, start);
+    USE_LABEL(c, start);
+    bool add_stopiteration_handler = ste->ste_coroutine || ste->ste_generator;
+    if (add_stopiteration_handler) {
+        /* codegen_wrap_in_stopiteration_handler will push a block, so we need to account for that */
+        RETURN_IF_ERROR(
+            _PyCompile_PushFBlock(c, NO_LOCATION, COMPILE_FBLOCK_STOP_ITERATION,
+                                  start, NO_LABEL, NULL));
+    }
+
+    for (Py_ssize_t i = first_instr; i < asdl_seq_LEN(body); i++) {
+        VISIT_IN_SCOPE(c, stmt, (stmt_ty)asdl_seq_GET(body, i));
+    }
+    if (add_stopiteration_handler) {
+        RETURN_IF_ERROR_IN_SCOPE(c, codegen_wrap_in_stopiteration_handler(c));
+        _PyCompile_PopFBlock(c, COMPILE_FBLOCK_STOP_ITERATION, start);
+    }
+
+    co = _PyCompile_OptimizeAndAssemble(c, 1);
+    _PyCompile_ExitScope(c);
+    if (co == NULL) {
+        return ERROR;
+    }
+
+    int ret = codegen_make_closure(c, loc, co, funcflags);
+    Py_DECREF(co);
+    RETURN_IF_ERROR(ret);
+    return SUCCESS;
+}
+
+static int
 codegen_if(compiler *c, stmt_ty s)
 {
     jump_target_label next;
@@ -5193,6 +5268,8 @@ codegen_visit_expr(compiler *c, expr_ty e)
         break;
     case Lambda_kind:
         return codegen_lambda(c, e);
+    case Lamdef_kind:
+        return codegen_lamdef(c, e);
     case IfExp_kind:
         return codegen_ifexp(c, e);
     case Dict_kind:

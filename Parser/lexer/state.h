@@ -134,6 +134,14 @@ struct tok_state {
     int tok_extra_tokens;
     int comment_newline;
     int implicit_newline;
+    int in_lamdef_colon;
+    int lamdef_allow_indent;
+    int lamdef_start_level;
+    int lamdef_start_indent;
+    int lamdef_start_col;
+    int lamdef_base_level;
+    int lamdef_nesting_level;
+    int at_logical_line_start;
 #ifdef Py_DEBUG
     int debug;
 #endif

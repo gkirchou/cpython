@@ -45,6 +45,16 @@ static inline tokenizer_mode* TOK_NEXT_MODE(struct tok_state* tok) {
 #define MAKE_TYPE_COMMENT_TOKEN(token_type, col_offset, end_col_offset) (\
                 _PyLexer_type_comment_token_setup(tok, token, token_type, col_offset, end_col_offset, p_start, p_end))
 
+#ifndef likely
+#if defined(__GNUC__) || defined(__INTEL_COMPILER) || defined(__clang__)
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)     __builtin_expect(!!(x), 0)
+#else
+#define likely(x)       (x)
+#define unlikely(x)     (x)
+#endif
+#endif
+
 /* Spaces in this constant are treated as "zero or more spaces or tabs" when
    tokenizing. */
 static const char* type_comment_prefix = "# type: ";
@@ -568,7 +578,7 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, struct t
             /* We can't jump back right here since we still
                may need to skip to the end of a comment */
         }
-        if (!blankline && tok->level == 0) {
+        if (!blankline && (tok->level == 0 || tok->lamdef_allow_indent)) {
             col = cont_line_col ? cont_line_col : col;
             altcol = cont_line_col ? cont_line_col : altcol;
             if (col == tok->indstack[tok->indent]) {
@@ -599,9 +609,14 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, struct t
                     tok->indent--;
                 }
                 if (col != tok->indstack[tok->indent]) {
-                    tok->done = E_DEDENT;
-                    tok->cur = tok->inp;
-                    return MAKE_TOKEN(ERRORTOKEN);
+                    if (tok->lamdef_allow_indent && col == tok->lamdef_start_col) {
+                        tok->lamdef_allow_indent = 0;
+                    }
+                    else {
+                        tok->done = E_DEDENT;
+                        tok->cur = tok->inp;
+                        return MAKE_TOKEN(ERRORTOKEN);
+                    }
                 }
                 if (altcol != tok->altindstack[tok->indent]) {
                     return MAKE_TOKEN(_PyTokenizer_indenterror(tok));
@@ -621,6 +636,13 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, struct t
                 p_end = tok->cur;
             }
             tok->pendin++;
+            if (tok->lamdef_allow_indent && tok->indent <= tok->lamdef_start_indent) {
+                tok->lamdef_allow_indent = 0;
+                token->level = 0;
+                if (tok->lamdef_nesting_level > 0) {
+                    tok->lamdef_nesting_level--;
+                }
+            }
             return MAKE_TOKEN(DEDENT);
         }
         else {
@@ -795,6 +817,20 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, struct t
         p_start = tok->start;
         p_end = tok->cur;
 
+        if (p_end - p_start == 6 && strncmp(p_start, "lamdef", 6) == 0) {
+             tok->lamdef_nesting_level++;
+             tok->lamdef_start_level = tok->level;
+             int col = 0;
+             for (const char *c = tok->line_start; c < p_start; c++) {
+                 if (*c == '\t') {
+                     col = (col / tok->tabsize + 1) * tok->tabsize;
+                 }
+                 else {
+                     col++;
+                 }
+             }
+             tok->lamdef_start_col = col;
+        }
         return MAKE_TOKEN(NAME);
     }
 
@@ -805,7 +841,19 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, struct t
     /* Newline */
     if (c == '\n') {
         tok->atbol = 1;
-        if (blankline || tok->level > 0) {
+        if (tok->in_lamdef_colon) {
+            tok->in_lamdef_colon = 0;
+            if (!tok->lamdef_allow_indent) {
+                    tok->lamdef_allow_indent = 1;
+                    tok->lamdef_start_indent = tok->indent;
+                    tok->lamdef_base_level = tok->level;
+            }
+            p_start = tok->start;
+            p_end = tok->cur - 1; /* Leave '\n' out of the string */
+            tok->cont_line = 0;
+            return MAKE_TOKEN(NEWLINE);
+        }
+        if (blankline || (tok->level > 0 && (!tok->lamdef_allow_indent || tok->level > tok->lamdef_base_level))) {
             if (tok->tok_extra_tokens) {
                 if (tok->comment_newline) {
                     tok->comment_newline = 0;
@@ -1269,11 +1317,13 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, struct t
         }
 
         if (c == ':' && cursor == current_tok->curly_bracket_expr_start_depth) {
-            current_tok->kind = TOK_FSTRING_MODE;
-            current_tok->in_format_spec = 1;
-            p_start = tok->start;
-            p_end = tok->cur;
-            return MAKE_TOKEN(_PyToken_OneChar(c));
+            if (tok->lamdef_start_level == -1 || tok->level != tok->lamdef_start_level) {
+                current_tok->kind = TOK_FSTRING_MODE;
+                current_tok->in_format_spec = 1;
+                p_start = tok->start;
+                p_end = tok->cur;
+                return MAKE_TOKEN(_PyToken_OneChar(c));
+            }
         }
     }
 
@@ -1386,6 +1436,11 @@ tok_get_normal_mode(struct tok_state *tok, tokenizer_mode* current_tok, struct t
     /* Punctuation character */
     p_start = tok->start;
     p_end = tok->cur;
+
+    if (c == ':' && tok->lamdef_start_level != -1 && tok->level == tok->lamdef_start_level) {
+        tok->in_lamdef_colon = 1;
+        tok->lamdef_start_level = -1;
+    }
     return MAKE_TOKEN(_PyToken_OneChar(c));
 }
 
@@ -1613,14 +1668,56 @@ f_string_middle:
 }
 
 static int
+tok_get_lamdef_mode(struct tok_state *tok, tokenizer_mode* current_tok, struct token *token)
+{
+    int rc;
+    if (current_tok->kind == TOK_REGULAR_MODE) {
+        rc = tok_get_normal_mode(tok, current_tok, token);
+    } else {
+        rc = tok_get_fstring_mode(tok, current_tok, token);
+    }
+
+    if (tok->at_logical_line_start) {
+        /* Check for potential lamdef structure delimiters. */
+        if (rc == OP && token->end - token->start == 1) {
+            char c = *token->start;
+            if (c == ',' || c == ']' || c == '}') {
+                /* Handle lamdef delimiter here if needed.
+                   For now, this is where the check would happen. */
+            }
+        }
+    }
+
+    if (rc == NEWLINE || rc == INDENT || rc == DEDENT) {
+        tok->at_logical_line_start = 1;
+    } else if (rc != NL && rc != COMMENT && rc != TYPE_COMMENT && rc != TYPE_IGNORE) {
+        tok->at_logical_line_start = 0;
+    }
+
+    return rc;
+}
+
+static int
 tok_get(struct tok_state *tok, struct token *token)
 {
     tokenizer_mode *current_tok = TOK_GET_MODE(tok);
-    if (current_tok->kind == TOK_REGULAR_MODE) {
-        return tok_get_normal_mode(tok, current_tok, token);
+    int rc;
+
+    if (likely(tok->lamdef_nesting_level == 0)) {
+        if (current_tok->kind == TOK_REGULAR_MODE) {
+            rc = tok_get_normal_mode(tok, current_tok, token);
+        } else {
+            rc = tok_get_fstring_mode(tok, current_tok, token);
+        }
+
+        if (unlikely(tok->lamdef_nesting_level > 0)) {
+            tok->at_logical_line_start = 0;
+        }
     } else {
-        return tok_get_fstring_mode(tok, current_tok, token);
+        rc = tok_get_lamdef_mode(tok, current_tok, token);
     }
+
+    return rc;
 }
 
 int

@@ -942,6 +942,8 @@ append_ast_expr(PyUnicodeWriter *writer, expr_ty e, int level)
         return append_ast_unaryop(writer, e, level);
     case Lambda_kind:
         return append_ast_lambda(writer, e, level);
+    case Lamdef_kind:
+        return append_ast_lambda(writer, e, level);
     case IfExp_kind:
         return append_ast_ifexp(writer, e, level);
     case Dict_kind:

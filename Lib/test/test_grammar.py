@@ -2059,5 +2059,393 @@ class GrammarTests(unittest.TestCase):
         self.assertEqual(test2(), "")
 
 
+class LamdDefTests(unittest.TestCase):
+    """
+    Incremental testing of lamdef functionality.
+    Each test method is independent and can be run separately.
+    """
+
+    def test_compile_basic(self):
+        """Level 0: Confirm basic syntax compiles"""
+        try:
+            code = """
+lamdef(x: int) -> int:
+    '''doc string'''
+    return x
+"""
+            compile(code, "<test>", "eval")
+        except SyntaxError as e:
+            self.fail(f"Failed: {e}")
+
+    def test_basic_single_line(self):
+        """Level 1: Single line basic functionality"""
+        code = """
+        l1 = lamdef(x):
+            return x * 2
+        assertEqual(l1(3), 6)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_multiline_return_only(self):
+        """Level 2: Multiline, return only"""
+        code = """
+        l1 = lamdef(x):
+            return x * 2
+        assertEqual(l1(3), 6)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_multiline_with_statement(self):
+        """Level 3: Multiline, with statements + return"""
+        code = """
+        l1 = lamdef(x):
+            y = x + 1
+            return y * 2
+        assertEqual(l1(3), 8)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_as_argument_single_line(self):
+        """Level 4: As argument, single line"""
+        code = """
+        l = [3, 1, -2]
+        s = sorted(l, key=lamdef(x):
+            return abs(x)
+        )
+        assertEqual(s, [1, -2, 3])
+        """
+        ns = {'assertEqual': self.assertEqual, 'abs': abs, 'sorted': sorted}
+        exec(textwrap.dedent(code), ns)
+
+    def test_as_argument_multiline(self):
+        """Level 5: As argument, multiline"""
+        code = """
+        l = [3, 1, -2]
+        s = sorted(l, key=lamdef(x):
+            return abs(x)
+        )
+        assertEqual(s, [1, -2, 3])
+        """
+        ns = {'assertEqual': self.assertEqual, 'abs': abs, 'sorted': sorted}
+        exec(textwrap.dedent(code), ns)
+
+    def test_no_parameters(self):
+        """Level 6: No parameters"""
+        code = """
+        l1 = lamdef():
+            return 42
+        assertEqual(l1(), 42)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_default_parameters(self):
+        """Level 7: Default parameters"""
+        code = """
+        l1 = lamdef(x, y=10):
+            return x + y
+        assertEqual(l1(5), 15)
+        assertEqual(l1(5, 5), 10)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_nested(self):
+        """Level 8: Nested lamdef"""
+        code = """
+        outer = lamdef(x):
+            return lamdef(y):
+                return x + y
+        inner = outer(5)
+        assertEqual(inner(10), 15)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_in_list(self):
+        """Level 9: In container"""
+        code = """
+        funcs = [lamdef(x):
+            return x*2
+        , lamdef(x):
+            return x*3
+        ]
+        assertEqual(funcs[0](2), 4)
+        assertEqual(funcs[1](2), 6)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_in_list_with_statement(self):
+        """Level 10: In container with statement"""
+        code = """
+        funcs = [lamdef(x): 
+            x = x + 1
+            return x*2
+        ,
+        lamdef(x):
+            x = x + 1
+            return x*3
+        ]
+        funcs2 = [lamdef(x): 
+            x = x + 1
+            return x*2
+        , lamdef(x):
+            x = x + 1
+            return x*3
+        ]
+        assertEqual(funcs[0](2), 6)
+        assertEqual(funcs[1](2), 9)
+        assertEqual(funcs2[0](2), 6)
+        assertEqual(funcs2[1](2), 9)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_in_dict(self):
+        """Level 11: In Dictionary"""
+        code = """
+        d = {
+          'add': lamdef(x, y):
+              return x + y
+        , 'sub': lamdef(x, y):
+              return x - y
+        }
+        assertEqual(d['add'](10, 5), 15)
+        assertEqual(d['sub'](10, 5), 5)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_closure_nonlocal(self):
+        """Level 12: Closure with nonlocal modification"""
+        code = """
+        def make_counter():
+            count = 0
+            return lamdef():
+                nonlocal count
+                count = count + 1
+                return count
+        
+        c = make_counter()
+        assertEqual(c(), 1)
+        assertEqual(c(), 2)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_var_args(self):
+        """Level 13: *args and **kwargs support"""
+        code = """
+        l1 = lamdef(*args, **kwargs):
+            return sum(args) + kwargs.get('offset', 0)
+        
+        assertEqual(l1(1, 2, 3), 6)
+        assertEqual(l1(1, 2, offset=10), 13)
+        """
+        ns = {'assertEqual': self.assertEqual, 'sum': sum}
+        exec(textwrap.dedent(code), ns)
+
+    def test_generator(self):
+        """Level 14: Generator support (yield)"""
+        code = """
+        gen_func = lamdef(n):
+            for i in range(n):
+                yield i * i
+        
+        result = list(gen_func(3))
+        assertEqual(result, [0, 1, 4])
+        """
+        ns = {'assertEqual': self.assertEqual, 'list': list, 'range': range}
+        exec(textwrap.dedent(code), ns)
+
+    def test_iife(self):
+        """Level 15: IIFE (Immediately Invoked Function Expression)"""
+        code = """
+        result = (lamdef(x):
+            y = x * 2
+            return y + 1
+        )(10)
+        
+        assertEqual(result, 21)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_control_flow(self):
+        """Level 16: Complex control flow (if/else, loops)"""
+        code = """
+        calc = lamdef(arr):
+            total = 0
+            for x in arr:
+                if x > 0:
+                    total = total + x if x > 1 else total
+            return total
+            
+        assertEqual(calc([1, -5, 2, -3]), 2)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_type_hints(self):
+        """Level 17: Type hints support"""
+        code = """
+        # Annotations should be parsed but ignored at runtime (or stored in __annotations__)
+        l1 = lamdef(x: int, y: int) -> int:
+            return x + y
+        
+        assertEqual(l1(1, 2), 3)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    """
+    # async lambda is not supported.
+    def test_async_await(self):
+        # Level 18: Async/Await support
+        import asyncio
+        
+        async_doubler = async lamdef(x):
+            await asyncio.sleep(0.01)
+            return x * 2
+        
+        result = asyncio.run(async_doubler(10))
+        assertEqual(result, 20)
+    """
+
+    def test_complex_arg_syntax(self):
+        """Level 19: Positional-only (/) and Keyword-only (*) arguments"""
+        code = """
+        # x is pos-only, y is standard, z is kw-only
+        func = lamdef(x, /, y, *, z):
+            return x + y + z
+        
+        res = func(1, 2, z=3)
+        assertEqual(res, 6)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_comments_and_whitespace_abuse(self):
+        """Level 20: Comments in weird places"""
+        code = """
+        l1 = lamdef(  # Comment
+            x, # Comment
+            y  # Comment
+        ):  # Comment
+            # Comment at start of body
+            return x + y
+        
+        assertEqual(l1(1, 2), 3)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_docstring(self):
+        """Level 21: Docstring support (Should simply be ignored or stored)"""
+        code = """
+        f = lamdef(x):
+            \"\"\"This is a docstring.\"\"\"
+            return x
+        
+        assertEqual(f(1), 1)
+        # Bonus: check if f.__doc__ exists, but not strictly required
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_walrus_in_body(self):
+        """Level 22: Walrus operator inside body (Colon confusion)"""
+        code = """
+        f = lamdef(data):
+            if (n := len(data)) > 5:
+                return n
+            return 0
+        
+        assertEqual(f("123456"), 6)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_decorator_inside_body(self):
+        """Level 23: Decorators usage inside lamdef body"""
+        code = """
+        def my_decorator(f):
+            return lambda: f() + 1
+
+        wrapper = lamdef():
+            @my_decorator
+            def inner():
+                return 10
+            return inner()
+        
+        assertEqual(wrapper(), 11)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_soft_keyword_compatibility(self):
+        """Level 24: lamdef as a variable name (Soft Keyword check)"""
+        code = """
+        lamdef = 10
+        
+        func = lamdef(x):
+            return x + lamdef
+            
+        assertEqual(func(5), 15)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_pattern_matching(self):
+        """Level 25: lamdef in pattern matching"""
+        code = """
+        def func(t):
+            match t:
+                case "a":
+                    return lamdef():
+                        return 1
+                case "b":
+                    return lamdef():
+                        return 2
+                case _:
+                    return lamdef():
+                        return -1
+        assertEqual(func("a")(), 1)
+        assertEqual(func("b")(), 2)
+        assertEqual(func("c")(), -1)
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+    def test_fstring(self):
+        """Level 26: f-string support"""
+        code = """
+        r = f"{(lamdef(x: int) -> int:
+            return x
+        )(1)}"
+        assertEqual(r, "1")
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+        
+    def test_fstring_with_format(self):
+        """Level 27: f-string support with format"""
+        code = """
+        import math
+        # The inner colon is for type hint, the outer colon is for formatting (.2f)
+        r = f"Pi: {(
+            lamdef() -> float:
+                return math.pi
+        )():.2f}"
+        assertEqual(r, "Pi: 3.14")
+        """
+        ns = {'assertEqual': self.assertEqual}
+        exec(textwrap.dedent(code), ns)
+
+
 if __name__ == '__main__':
     unittest.main()
